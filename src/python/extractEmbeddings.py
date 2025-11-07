@@ -74,13 +74,13 @@ def save_sample_embeddings(vectors: np.ndarray, tokens: list, out_dir: str):
 
 def main():
     parser = argparse.ArgumentParser(description='提取20NG单条样本的词向量并保存到文件')
-    parser.add_argument('--data_root', default='../../datasets/20NG', help='20NG数据根目录')
+    parser.add_argument('--data_root', default='/Users/tangxianning/Downloads/FHE-Linformer/datasets/20NG', help='20NG数据根目录')
     parser.add_argument('--split', choices=['train', 'test'], default='train', help='选择数据集划分')
     parser.add_argument('--index', type=int, default=1, help='样本索引')
     parser.add_argument('--source', choices=['cache', 'ckpt'], default='cache', help='向量来源：缓存或检查点')
-    parser.add_argument('--cache_path', default='../../cache/skipgram_d128_NG.pkl', help='当source=cache时的缓存路径')
+    parser.add_argument('--cache_path', default='/Users/tangxianning/Downloads/FHE-Linformer/cache/skipgram_d128_NG.pkl', help='当source=cache时的缓存路径')
     parser.add_argument('--ckpt_path', default='', help='当source=ckpt时的检查点路径')
-    parser.add_argument('--save_dir', default='../tmp_embeddings', help='输出保存目录')
+    parser.add_argument('--save_dir', default='/Users/tangxianning/Downloads/FHE-Linformer/src/tmp_embeddings', help='输出保存目录')
     args = parser.parse_args()
 
     # 构建一致词表的 Tokenizer

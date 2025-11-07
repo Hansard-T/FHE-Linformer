@@ -20,7 +20,7 @@ using Ptxt = Plaintext;
 using Ctxt = Ciphertext<DCRTPoly>;
 
 class FHEController {
-    CryptContext<DCRTPoly> context;
+    CryptoContext<DCRTPoly> context;
 
 public:
     int circuit_depth;
@@ -85,8 +85,8 @@ public:
     Ctxt read_input(const string& filename, double scale = 1);
     Ctxt read_repeated_input(const string& filename, double scale = 1);
     Ctxt read_expanded_input(const string& filename, double scale = 1);
-
     Ptxt read_plain_input(const string& filename, int level = 0, double scale = 1);
+    vector<Ptxt> read_plain_256_input(const string& filename, int level = 0, double scale = 1);
     //Ptxt read_plain_512_input(const string& filename, int level = 0, double scale = 1);
     Ptxt read_plain_repeated_input(const string& filename, int level = 0, double scale = 1);
     Ptxt read_plain_repeated_512_input(const string& filename, int level = 0, double scale = 1);
@@ -145,7 +145,7 @@ public:
     vector<Ctxt> load_vector(string filename);
     Ctxt load_ciphertext(string filename);
 
-    int gelu_degree = 13;
+    int relu_degree = 119;
     string parameters_folder = "keys";
 
 private:
