@@ -6,7 +6,7 @@ def extract_model_parameters_numeric():
     """提取Linformer模型参数并保存为纯数字格式的txt文件"""
     
     # 加载模型
-    ckpt_path = "../trained_models/Linformer_L1H512A2_p32_for_20NG_cv1_903.pkl"
+    ckpt_path = "../trained_models/Linformer_L1H128A2_p32_for_20NG_cv1_906.pkl"
     ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     
     model_state = ckpt['model']

@@ -14,6 +14,7 @@ enum class Parameters { Generate, Load };
 FHEController controller;
 
 Ctxt encoder1();
+Ctxt pooler(Ctxt input);
 
 string input_folder;
 
@@ -99,16 +100,19 @@ int main(int argc, char* argv[]) {
     Ctxt encoder1output;
 
     encoder1output = encoder1();
-    encoder1output = controller.load_ciphertext("../checkpoint/encoder1output.bin");
+
+    Ctxt pooled = pooler(encoder1output);
 
     int timing = (duration_cast<milliseconds>( high_resolution_clock::now() - start)).count() / 1000.0;
     if (verbose) cout << endl << "The evaluation of the FHE circuit took: " << timing << " seconds." << endl;
 }
 
 Ctxt encoder1() {
+    // self-attention
+
     auto start = high_resolution_clock::now();
 
-    int inputs_count = 0;
+    int inputs_count = 1;
 
     std::filesystem::path p1 { input_folder };
 
@@ -131,7 +135,8 @@ Ctxt encoder1() {
     }
 
     vector<Ctxt> inputs;
-    for (int i = 0; i < inputs_count; i++) {
+    inputs.push_back(controller.read_expanded_input("../weights-20NG/cls_token.txt"));
+    for (int i = 0; i < inputs_count - 1; i++) {
         inputs.push_back(controller.read_expanded_input(input_folder + "input_" + to_string(i) + ".txt"));
     }
 
@@ -167,6 +172,8 @@ Ctxt encoder1() {
     if (verbose) cout << "The evaluation of Self-Attention took: " << (duration_cast<milliseconds>( high_resolution_clock::now() - start)).count() / 1000.0 << " seconds." << endl;
     if (verbose) controller.print(output[0], 128, "Self-Attention (Repeated)");
 
+    // 残差 + Affine1    
+
     start = high_resolution_clock::now();
 
     Ptxt dense_w = controller.read_plain_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WO_weight.txt", output[0]->GetLevel());
@@ -184,8 +191,6 @@ Ctxt encoder1() {
 
     size_t S = output.size();
     double fL1 = c10 + c11 / sqrt(S) + c12 / S;
-
-    cout << "fL1: " << fL1 << endl;
 
     vector<Ctxt> output_0;
     vector<Ctxt> output_1;
@@ -219,29 +224,159 @@ Ctxt encoder1() {
     if (verbose) cout << "The evaluation of Self-Output took: " << (duration_cast<milliseconds>( high_resolution_clock::now() - start)).count() / 1000.0 << " seconds." << endl;
     if (verbose) controller.print_expanded(output_0[0], 0, 128, "Self-Output (Expanded)");
 
+    // FFN
+
     start = high_resolution_clock::now();
 
-    Ptxt intermediate_w_1 = controller.read_plain_input("../weights-20NG/ffn_W1_block_0.txt", wrappedOutput_0->GetLevel());
-    Ptxt intermediate_w_2 = controller.read_plain_input("../weights-20NG/ffn_W1_block_1.txt", wrappedOutput_0->GetLevel());
-    Ptxt intermediate_w_3 = controller.read_plain_input("../weights-20NG/ffn_W1_block_2.txt", wrappedOutput_0->GetLevel());
-    Ptxt intermediate_w_4 = controller.read_plain_input("../weights-20NG/ffn_W1_block_3.txt", wrappedOutput_0->GetLevel());
+    double GELU_max_abs_value = 0.4078;
+
+    Ptxt intermediate_w_1 = controller.read_plain_input("../weights-20NG/ffn_W0_block_0.txt", wrappedOutput_0->GetLevel(), GELU_max_abs_value);
+    Ptxt intermediate_w_2 = controller.read_plain_input("../weights-20NG/ffn_W0_block_1.txt", wrappedOutput_0->GetLevel(), GELU_max_abs_value);
+    Ptxt intermediate_w_3 = controller.read_plain_input("../weights-20NG/ffn_W0_block_2.txt", wrappedOutput_0->GetLevel(), GELU_max_abs_value);
+    Ptxt intermediate_w_4 = controller.read_plain_input("../weights-20NG/ffn_W0_block_3.txt", wrappedOutput_0->GetLevel(), GELU_max_abs_value);
 
     vector<Ptxt> dense_weights = {intermediate_w_1, intermediate_w_2, intermediate_w_3, intermediate_w_4};
 
-    Ptxt intermediate_bias = controller.read_plain_input("../weights-20NG/linformer_transformerLayers_transformer0_ffn_Wffn_0_bias.txt", wrappedOutput_0->GetLevel() + 1);
+    Ptxt intermediate_bias = controller.read_plain_input("../weights-20NG/linformer_transformerLayers_transformer0_ffn_Wffn_0_bias.txt", wrappedOutput_0->GetLevel() + 1, GELU_max_abs_value);
 
     output_0 = controller.matmulRElarge(output_0, dense_weights, intermediate_bias);
     output_1 = controller.matmulRElarge(output_1, dense_weights, intermediate_bias);
 
-    output_0 = controller.generate_containers(output_0, nullptr);
-    output_1 = controller.generate_containers(output_1, nullptr);
+    // 合并两个输出向量
+    vector<Ctxt> outputs_raw;
+    outputs_raw.reserve(output_0.size() + output_1.size());
+    outputs_raw.insert(outputs_raw.end(), output_0.begin(), output_0.end());
+    outputs_raw.insert(outputs_raw.end(), output_1.begin(), output_1.end());
 
-    for (int i = 0; i < output_0.size(); i++) {
-        controller.print_min_max(output_0[i]);
-    }
-    for (int i = 0; i < output_1.size(); i++) {
-        controller.print_min_max(output_1[i]);
+    // 统一打包为容器密文
+    auto outputs = controller.generate_containers(outputs_raw, nullptr);
+
+    for (int i = 0; i < outputs.size(); i++) {
+        outputs[i] = controller.eval_gelu_function(outputs[i], -1, 1, GELU_max_abs_value, 119);
+        outputs[i] = controller.bootstrap(outputs[i]);
     }
 
-    return 0;
+    vector<vector<Ctxt>> unwrappedLargeOutput = controller.unwrapRepeatedLarge(outputs, inputs.size());
+
+    if (verbose) cout << "The evaluation of Intermediate took: " << (duration_cast<milliseconds>( high_resolution_clock::now() - start)).count() / 1000.0 << " seconds." << endl;
+    if (verbose) controller.print(unwrappedLargeOutput[0][0], 128, "Intermediate (Containers)");
+
+    // 残差 + Affine2
+
+    Ptxt output_w_1 = controller.read_plain_input("../weights-20NG/ffn_W2_block_0.txt", unwrappedLargeOutput[0][0]->GetLevel());
+    Ptxt output_w_2 = controller.read_plain_input("../weights-20NG/ffn_W2_block_1.txt", unwrappedLargeOutput[0][0]->GetLevel());
+    Ptxt output_w_3 = controller.read_plain_input("../weights-20NG/ffn_W2_block_2.txt", unwrappedLargeOutput[0][0]->GetLevel());
+    Ptxt output_w_4 = controller.read_plain_input("../weights-20NG/ffn_W2_block_3.txt", unwrappedLargeOutput[0][0]->GetLevel());
+
+    Ptxt output_bias = controller.read_plain_expanded_input("../weights-20NG/linformer_transformerLayers_transformer0_ffn_Wffn_2_bias.txt", unwrappedLargeOutput[0][0]->GetLevel() + 1);
+
+    output = controller.matmulCRlarge(unwrappedLargeOutput, {output_w_1, output_w_2, output_w_3, output_w_4}, output_bias);
+
+    vector<Ctxt> output_2;
+    vector<Ctxt> output_3;
+
+    for (int i = 0; i < 128; i++) {
+        output_2.push_back(output[i]);
+    }
+    for (int i = 128; i < output.size(); i++) {
+        output_3.push_back(output[i]);
+    }
+
+    Ctxt wrappedOutput_2 = controller.wrapUpExpanded(output_2);
+    Ctxt wrappedOutput_3 = controller.wrapUpExpanded(output_3);
+
+    wrappedOutput_2 = controller.add(wrappedOutput_2, output_copy_0);
+    wrappedOutput_3 = controller.add(wrappedOutput_3, output_copy_1);
+
+    double c20 = read_value("../weights-20NG/linformer_transformerLayers_transformer0_ffn_affine2_c0.txt");
+    double c21 = read_value("../weights-20NG/linformer_transformerLayers_transformer0_ffn_affine2_c1.txt");
+    double c22 = read_value("../weights-20NG/linformer_transformerLayers_transformer0_ffn_affine2_c2.txt");
+
+    size_t S_1 = output.size();
+    double fL2 = c20 + c21 / sqrt(S_1) + c22 / S_1;
+
+    cout << "fL2: " << fL2 << endl;
+
+    Ptxt a2 = controller.read_plain_repeated_input("../weights-20NG/linformer_transformerLayers_transformer0_ffn_affine2_a.txt", wrappedOutput_2->GetLevel(), fL2);
+    Ptxt b2 = controller.read_plain_repeated_input("../weights-20NG/linformer_transformerLayers_transformer0_ffn_affine2_b.txt", wrappedOutput_3->GetLevel(), fL2);
+
+    wrappedOutput_2 = controller.mult(wrappedOutput_2, a2);
+    wrappedOutput_3 = controller.mult(wrappedOutput_3, a2);
+
+    wrappedOutput_2 = controller.add(wrappedOutput_2, b2);
+    wrappedOutput_3 = controller.add(wrappedOutput_3, b2);
+
+    output_2 = controller.unwrapExpanded(wrappedOutput_2, 128);
+    output_3 = controller.unwrapExpanded(wrappedOutput_3, inputs.size() - 128);
+
+    if (verbose) cout << "The evaluation of Output took: " << (duration_cast<milliseconds>( high_resolution_clock::now() - start)).count() / 1000.0 << " seconds." << endl;
+    if (verbose) controller.print_expanded(output_2[0], 0, 128,"Output (Expanded)");
+
+    return output_2[0];
+}
+
+Ctxt pooler(Ctxt input) {
+    auto start = high_resolution_clock::now();
+
+    double tanhScale = 0.9 / 1.003518;
+
+    Ptxt weight = controller.read_plain_input("../weights-20NG/pooler_dense_weight.txt", input->GetLevel(), tanhScale);
+    Ptxt bias = controller.read_plain_repeated_input("../weights-20NG/pooler_dense_bias.txt", input->GetLevel(), tanhScale);
+
+    Ctxt output = controller.mult(input, weight);
+
+    output = controller.rotsum(output, 128, 128);
+
+    output = controller.add(output, bias);
+
+    output = controller.bootstrap(output);
+
+    controller.print_min_max(output);
+
+    output = controller.eval_tanh_function(output, -1, 1, tanhScale, 300);
+
+    if (verbose) cout << "The evaluation of Pooler took: " << (duration_cast<milliseconds>( high_resolution_clock::now() - start)).count() / 1000.0 << " seconds." << endl;
+    if (verbose) controller.print(output, 128, "Pooler (Repeated)");
+
+    return output;
+}
+
+Ctxt classifier(Ctxt input) {
+    Ptxt fc_w_1 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_0.txt", input->GetLevel());
+    Ptxt fc_w_2 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_1.txt", input->GetLevel());
+    Ptxt fc_w_3 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_2.txt", input->GetLevel());
+    Ptxt fc_w_4 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_3.txt", input->GetLevel());
+    Ptxt fc_w_5 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_4.txt", input->GetLevel());
+    Ptxt fc_w_6 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_5.txt", input->GetLevel());
+    Ptxt fc_w_7 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_6.txt", input->GetLevel());
+    Ptxt fc_w_8 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_7.txt", input->GetLevel());
+
+    vector<Ptxt> dense_weights = {intermediate_w_1, intermediate_w_2, intermediate_w_3, intermediate_w_4};
+
+    Ptxt fc_b = controller.read_plain_input("../weights-20NG/fcLinear_0_bias.txt", input->GetLevel());
+
+    output = controller.matmulRElarge(unwrappedinput, dense_weights, fc_b);
+
+    Ptxt weight = controller.read_plain_input("../weights-20NG/fcLinear_0_weight.txt", input->GetLevel());
+    Ptxt bias = controller.read_plain_expanded_input("../weights-20NG/fcLinear_0_bias.txt", input->GetLevel());
+
+    Ctxt output = controller.mult(input, weight);
+
+    output = controller.rotsum(output, 128, 1);
+
+    output = controller.add(output, bias);
+
+    vector<double> mask;
+    for (int i = 0; i < controller.num_slots; i++) {
+        mask.push_back(0);
+    }
+
+    mask[0] = 1;
+    mask[128] = 1;
+
+    output = controller.mult(output, controller.encrypt(mask, output->GetLevel()));
+
+    output = controller.add(output, controller.rotate(controller.rotate(output, -1), 128));
+
+    return output;
 }

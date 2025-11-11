@@ -61,12 +61,10 @@ def main():
         raise ValueError(f"权重形状 {W.shape} 与期望 {(args.rows_per_block * 4, 128)} 不一致")
 
     blocks = split_into_blocks(W, rows_per_block=args.rows_per_block)
-    paths = save_blocks(blocks, args.out_dir, base_name='ffn_W1_block', fmt=args.fmt, delimiter=args.delimiter)
+    paths = save_blocks(blocks, args.out_dir, base_name='ffn_W0_block', fmt=args.fmt, delimiter=args.delimiter)
     print('保存以下文件:')
     for p in paths:
         print(p)
-
-    os.system('rm ../../weights-20NG/linformer_transformerLayers_transformer0_ffn_Wffn_0_weight.txt')
 
 
 if __name__ == '__main__':
