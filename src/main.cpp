@@ -15,6 +15,7 @@ FHEController controller;
 
 Ctxt encoder1();
 Ctxt pooler(Ctxt input);
+Ctxt classifier(Ctxt input);
 
 string input_folder;
 
@@ -103,8 +104,18 @@ int main(int argc, char* argv[]) {
 
     Ctxt pooled = pooler(encoder1output);
 
+    Ctxt classified = classifier(pooled);
+
+    if (verbose) cout << "The circuit has been evaluated, the results are sent back to the client" << endl << endl;
+    if (verbose) cout << "CLIENT-SIDE" << endl;
+
+    vector<double> plain_result = controller.decrypt_tovector(classified, 16384);
+
     int timing = (duration_cast<milliseconds>( high_resolution_clock::now() - start)).count() / 1000.0;
     if (verbose) cout << endl << "The evaluation of the FHE circuit took: " << timing << " seconds." << endl;
+
+    size_t idx = std::distance(plain_result.begin(), std::max_element(plain_result.begin(), plain_result.end()));
+    if (verbose) cout << "The predicted class is: " << idx / 128 << endl;
 }
 
 Ctxt encoder1() {
@@ -342,21 +353,6 @@ Ctxt pooler(Ctxt input) {
 }
 
 Ctxt classifier(Ctxt input) {
-    Ptxt fc_w_1 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_0.txt", input->GetLevel());
-    Ptxt fc_w_2 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_1.txt", input->GetLevel());
-    Ptxt fc_w_3 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_2.txt", input->GetLevel());
-    Ptxt fc_w_4 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_3.txt", input->GetLevel());
-    Ptxt fc_w_5 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_4.txt", input->GetLevel());
-    Ptxt fc_w_6 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_5.txt", input->GetLevel());
-    Ptxt fc_w_7 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_6.txt", input->GetLevel());
-    Ptxt fc_w_8 = controller.read_plain_input("../weights-20NG/fcLinear_0_weight_block_7.txt", input->GetLevel());
-
-    vector<Ptxt> dense_weights = {intermediate_w_1, intermediate_w_2, intermediate_w_3, intermediate_w_4};
-
-    Ptxt fc_b = controller.read_plain_input("../weights-20NG/fcLinear_0_bias.txt", input->GetLevel());
-
-    output = controller.matmulRElarge(unwrappedinput, dense_weights, fc_b);
-
     Ptxt weight = controller.read_plain_input("../weights-20NG/fcLinear_0_weight.txt", input->GetLevel());
     Ptxt bias = controller.read_plain_expanded_input("../weights-20NG/fcLinear_0_bias.txt", input->GetLevel());
 
@@ -371,12 +367,11 @@ Ctxt classifier(Ctxt input) {
         mask.push_back(0);
     }
 
-    mask[0] = 1;
-    mask[128] = 1;
+    for (int i = 0; i < 20; i++) {
+        mask[i * 128] = 1;
+    }
 
     output = controller.mult(output, controller.encrypt(mask, output->GetLevel()));
-
-    output = controller.add(output, controller.rotate(controller.rotate(output, -1), 128));
 
     return output;
 }

@@ -117,6 +117,7 @@ public:
 
     Ctxt wrapUpRepeated(vector<Ctxt> vectors);
     Ctxt wrapUpExpanded(vector<Ctxt> vectors);
+
     vector<Ctxt> unwrapExpanded(Ctxt c, int inputs_num);
     vector<vector<Ctxt>> unwrapRepeatedLarge(vector<Ctxt> c, int input_number);
     vector<Ctxt> unwrapScoresExpanded(Ctxt c, int inputs_num);

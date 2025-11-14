@@ -48,7 +48,7 @@ def save_blocks(blocks: list, out_dir: str, base_name: str = 'ffn_W1_block', fmt
 
 def main():
     parser = argparse.ArgumentParser(description='将 FFN 第一层权重 (512×128) 拆分为四个 128×128 文件')
-    parser.add_argument('--weight_txt', default='../../weights-20NG/linformer_transformerLayers_transformer0_ffn_Wffn_0_weight.txt', help='数值参数文件路径（例如 linformer_transformerLayers_transformer0_ffn_Wffn_0_weight.txt）')
+    parser.add_argument('--weight_txt', default='../../weights-20NG/linformer_transformerLayers_transformer0_ffn_Wffn_2_weight.txt', help='数值参数文件路径（例如 linformer_transformerLayers_transformer0_ffn_Wffn_0_weight.txt）')
     parser.add_argument('--out_dir', default='../../weights-20NG', help='输出目录')
     parser.add_argument('--rows_per_block', type=int, default=128, help='每块的行数，默认128')
     parser.add_argument('--fmt', default='%.18e', help='保存格式，默认 %.18e')
@@ -61,7 +61,7 @@ def main():
         raise ValueError(f"权重形状 {W.shape} 与期望 {(args.rows_per_block * 4, 128)} 不一致")
 
     blocks = split_into_blocks(W, rows_per_block=args.rows_per_block)
-    paths = save_blocks(blocks, args.out_dir, base_name='ffn_W0_block', fmt=args.fmt, delimiter=args.delimiter)
+    paths = save_blocks(blocks, args.out_dir, base_name='ffn_W2_block', fmt=args.fmt, delimiter=args.delimiter)
     print('保存以下文件:')
     for p in paths:
         print(p)
