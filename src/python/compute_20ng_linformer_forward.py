@@ -72,153 +72,146 @@ def load_input_vectors(dir_path: str, files_sorted: list) -> np.ndarray:
     return np.vstack(vecs)
 
 
+def load_txt(path, expect_cols=None):
+    try:
+        arr = np.loadtxt(path, delimiter=',')
+    except Exception:
+        arr = np.loadtxt(path)
+    if arr.ndim == 1:
+        if expect_cols is not None:
+            total = arr.size
+            if total % expect_cols == 0:
+                arr = arr.reshape(total // expect_cols, expect_cols)
+            else:
+                return arr.astype(np.float32)
+        else:
+            return arr.astype(np.float32)
+    if expect_cols is not None and arr.shape[1] != expect_cols:
+        raise ValueError(f"文件 {path} 列数 {arr.shape[1]} != 期望 {expect_cols}")
+    return arr.astype(np.float32)
+
+
+def load_matrix(path, expect_shape):
+    rows, cols = expect_shape
+    try:
+        arr = np.loadtxt(path, delimiter=',')
+    except Exception:
+        arr = np.loadtxt(path)
+    if arr.ndim == 1:
+        total = arr.size
+        if total % rows == 0:
+            c2 = total // rows
+            arr = arr.reshape(rows, c2)
+            if c2 > cols:
+                arr = arr[:, :cols]
+            elif c2 < cols:
+                raise ValueError(f"文件 {path} 列数 {c2} 少于期望 {cols}")
+        else:
+            raise ValueError(f"文件 {path} 元素数 {total} 无法按 {rows} 行整除")
+    elif arr.shape[0] == rows and arr.shape[1] != cols:
+        if arr.shape[1] > cols:
+            arr = arr[:, :cols]
+        else:
+            raise ValueError(f"文件 {path} 列数 {arr.shape[1]} 少于期望 {cols}")
+    elif arr.shape != (rows, cols):
+        raise ValueError(f"文件 {path} 形状 {arr.shape} 不等于期望 {(rows, cols)}")
+    return arr.astype(np.float32)
+
+
 def main():
-    parser = argparse.ArgumentParser(description='使用Linformer(20NG)权重对单条样本执行前向并保存数值文件')
-    parser.add_argument('--tokens_dir', default='/Users/tangxianning/Downloads/FHE-Linformer/src/tmp_embeddings', help='包含tokens.txt的目录')
-    parser.add_argument('--data_root', default='/Users/tangxianning/Downloads/FHE-Linformer/datasets/20NG', help='20NG数据根目录')
-    parser.add_argument('--ckpt_path', default='/Users/tangxianning/Downloads/FHE-Linformer/src/trained_models/Linformer_L1H512A2_p32_for_20NG_cv1_903.pkl', help='Linformer检查点路径')
-    parser.add_argument('--precompress', action='store_true', help='先用E/F在序列维度对输入降维（与先算K/V后乘E/F数值等价）')
-    parser.add_argument('--use_inputs', action='store_true', help='从 tokens_dir 中的 input_*.txt 直接读取每个位置的输入向量')
+    parser = argparse.ArgumentParser(description='使用 tmp_embeddings/input_*.txt 与 weights-20NG 文本权重进行前向推理')
+    parser.add_argument('--tokens_dir', default='/Users/tangxianning/Downloads/FHE-Linformer/src/tmp_embeddings', help='包含 input_*.txt 的目录')
+    parser.add_argument('--weights_dir', default='/Users/tangxianning/Downloads/FHE-Linformer/weights-20NG', help='文本权重目录')
     args = parser.parse_args()
 
-    input_files = list_input_files(args.tokens_dir)
-    if not input_files:
+    files_sorted = list_input_files(args.tokens_dir)
+    if not files_sorted:
         raise FileNotFoundError(f"在 {args.tokens_dir} 没有找到 input_*.txt 文件")
-    S = len(input_files)
-    x_emb = load_input_vectors(args.tokens_dir, input_files)  # [S, D]
+    x_emb = load_input_vectors(args.tokens_dir, files_sorted)  # [S,128]
+    S = x_emb.shape[0]
 
-    # 加载检查点权重
-    ckpt = torch.load(args.ckpt_path, map_location='cpu', weights_only=False)
-    sd = ckpt['model']
-
-    # 取需要的权重为numpy
-    posEmb = sd['posEmb'].detach().cpu().numpy()  # [700, 128]
-
-    # 头部线性映射权重（每头一个Linear）
-    to_q_w = [sd['linformer.seq.0.fn.to_q.0.weight'].detach().cpu().numpy(),
-              sd['linformer.seq.0.fn.to_q.1.weight'].detach().cpu().numpy()]  # [256,128]
-    to_k_w = [sd['linformer.seq.0.fn.to_k.0.weight'].detach().cpu().numpy(),
-              sd['linformer.seq.0.fn.to_k.1.weight'].detach().cpu().numpy()]  # [256,128]
-    to_v_w = [sd['linformer.seq.0.fn.to_v.0.weight'].detach().cpu().numpy(),
-              sd['linformer.seq.0.fn.to_v.1.weight'].detach().cpu().numpy()]  # [256,128]
-
-    # 低秩投影矩阵 E/F（按S切片列）
-    E = [sd['linformer.seq.0.fn.heads.0.E.weight'].detach().cpu().numpy(),
-         sd['linformer.seq.0.fn.heads.1.E.weight'].detach().cpu().numpy()]  # [32,700]
-    F = [sd['linformer.seq.0.fn.heads.0.F.weight'].detach().cpu().numpy(),
-         sd['linformer.seq.0.fn.heads.1.F.weight'].detach().cpu().numpy()]  # [32,700]
-
-    # 输出投影与偏置
-    w_o = sd['linformer.seq.0.fn.w_o.weight'].detach().cpu().numpy()  # [128,512]
-    b_o = sd['linformer.seq.0.fn.w_o.bias'].detach().cpu().numpy()    # [128]
-
-    # Norm 与 FFN 权重
-    norm0_w = sd['linformer.seq.0.norm.weight'].detach().cpu().numpy()
-    norm0_b = sd['linformer.seq.0.norm.bias'].detach().cpu().numpy()
-    w1 = sd['linformer.seq.1.fn.w_1.weight'].detach().cpu().numpy()   # [512,128]
-    b1 = sd['linformer.seq.1.fn.w_1.bias'].detach().cpu().numpy()     # [512]
-    w2 = sd['linformer.seq.1.fn.w_2.weight'].detach().cpu().numpy()   # [128,512]
-    b2 = sd['linformer.seq.1.fn.w_2.bias'].detach().cpu().numpy()     # [128]
-    norm1_w = sd['linformer.seq.1.norm.weight'].detach().cpu().numpy()
-    norm1_b = sd['linformer.seq.1.norm.bias'].detach().cpu().numpy()
+    posEmb = load_matrix(os.path.join(args.weights_dir, 'posEmb.txt'), (700, 128))  # [700,128]
+    cls_token = load_txt(os.path.join(args.weights_dir, 'cls_token.txt'))  # [128]
 
     pos_slice = posEmb[:S] / 3.0
-    x_in = x_emb + pos_slice
+    x_main_in = x_emb + pos_slice
+    x_in = np.vstack([cls_token.reshape(1, -1), x_main_in])  # [S+1,128]
+    S_total = x_in.shape[0]
 
-    # 计算 Q/K/V（两头）
-    Q = []
-    K = []
-    V = []
-    for h in range(2):
-        Q.append(x_in @ to_q_w[h].T)  # [S,256]
-        if args.precompress:
-            Eh = E[h][:, :S]  # [32,S]
-            Fh = F[h][:, :S]  # [32,S]
-            X_E = Eh @ x_in           # [32,128]
-            X_F = Fh @ x_in           # [32,128]
-            K.append(X_E @ to_k_w[h].T)  # [32,256]
-            V.append(X_F @ to_v_w[h].T)  # [32,256]
-        else:
-            K.append(x_in @ to_k_w[h].T)
-            V.append(x_in @ to_v_w[h].T)
+    E_w = load_matrix(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_selfAttn_E_weight.txt'), (32, 700))  # [32,700]
+    E_b = load_txt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_selfAttn_E_bias.txt'))    # [32]
+    F_w = load_matrix(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_selfAttn_F_weight.txt'), (32, 700))  # [32,700]
+    F_b = load_txt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_selfAttn_F_bias.txt'))    # [32]
 
-    # 低秩压缩：EK / FV
-    EK = []
-    FV = []
-    for h in range(2):
-        Eh = E[h][:, :S]  # [32,S]
-        Fh = F[h][:, :S]  # [32,S]
-        if args.precompress:
-            # 已经在上面用E/F先压缩输入计算出K/V，这里无需再乘一次E/F
-            EK.append(K[h])  # [32,256]
-            FV.append(V[h])  # [32,256]
-        else:
-            EK.append(Eh @ K[h])  # [32,256]
-            FV.append(Fh @ V[h])  # [32,256]
+    Eh = E_w[:, :S_total]
+    Fh = F_w[:, :S_total]
+    X_E = Eh @ x_in + E_b.reshape(-1, 1)   # [32,128]
+    X_F = Fh @ x_in + F_b.reshape(-1, 1)   # [32,128]
 
-    # 注意力计算（压缩长度k=32）
-    dim_d = Q[0].shape[-1]
-    scale = 1.0 / np.sqrt(dim_d)
-    O_heads = []
-    for h in range(2):
-        # logits: [S,32]
-        logits = (Q[h] @ EK[h].T) * scale
-        # softmax 按最后一维
-        logits_max = logits.max(axis=-1, keepdims=True)
-        exp = np.exp(logits - logits_max)
-        attn = exp / exp.sum(axis=-1, keepdims=True)  # [S,32]
-        # 输出: [S,256]
-        O = attn @ FV[h]
-        O_heads.append(O)
+    WQ = load_matrix(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_selfAttn_WQ_weight.txt'), (128, 128))  # [128,128]
+    BQ = load_txt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_selfAttn_WQ_bias.txt'))    # [256]
+    WK = load_matrix(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_selfAttn_WK_weight.txt'), (128, 128))  # [128,128]
+    BK = load_txt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_selfAttn_WK_bias.txt'))    # [256]
+    WV = load_matrix(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_selfAttn_WV_weight.txt'), (128, 128))  # [128,128]
+    BV = load_txt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_selfAttn_WV_bias.txt'))    # [256]
 
-    # 拼接头并线性输出
-    O_cat = np.concatenate(O_heads, axis=-1)  # [S,512]
-    attn_out = O_cat @ w_o.T + b_o.reshape(1, -1)  # [S,128]
+    Q = x_in @ WQ.T + BQ.reshape(1, -1)        # [S+1,256]
+    K = X_E @ WK.T + BK.reshape(1, -1)         # [32,256]
+    V = X_F @ WV.T + BV.reshape(1, -1)         # [32,256]
 
-    # 残差 + Norm0
+    scale = 1.0 / np.sqrt(Q.shape[-1])
+    logits = (Q @ K.T) * scale                  # [S+1,32]
+    logits_max = logits.max(axis=-1, keepdims=True)
+    attn = np.exp(logits - logits_max)
+    attn = attn / attn.sum(axis=-1, keepdims=True)
+    O = attn @ V                                # [S+1,256]
+
+    WO = load_matrix(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_selfAttn_WO_weight.txt'), (128, 128))  # [128,128]
+    BO = load_txt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_selfAttn_WO_bias.txt'))    # [128]
+    attn_out = O @ WO.T + BO.reshape(1, -1)     # [S+1,128]
+
     x_attn_res = x_in + attn_out
-    x_norm0 = layernorm(x_attn_res, norm0_w, norm0_b)
 
-    # 前馈 FFN: GELU(w1*x + b1) -> w2 + b2
-    ff_hidden = gelu(x_norm0 @ w1.T + b1.reshape(1, -1))
-    ff_out = ff_hidden @ w2.T + b2.reshape(1, -1)
+    c10 = float(np.loadtxt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_ffn_affine1_c0.txt')))
+    c11 = float(np.loadtxt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_ffn_affine1_c1.txt')))
+    c12 = float(np.loadtxt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_ffn_affine1_c2.txt')))
+    fL1 = c10 + c11 / np.sqrt(S_total) + c12 / S_total
+    a1 = load_txt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_ffn_affine1_a.txt')) * fL1
+    b1 = load_txt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_ffn_affine1_b.txt')) * fL1
+    x_norm0 = x_attn_res * a1.reshape(1, -1) + b1.reshape(1, -1)
 
-    # 残差 + Norm1
+    Wffn0 = load_matrix(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_ffn_Wffn_0_weight.txt'), (512, 128))  # [512,128]
+    Bffn0 = load_txt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_ffn_Wffn_0_bias.txt'))    # [512]
+    Wffn2 = load_matrix(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_ffn_Wffn_2_weight.txt'), (128, 512))  # [128,512]
+    Bffn2 = load_txt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_ffn_Wffn_2_bias.txt'))    # [128]
+
+    ff_hidden = gelu(x_norm0 @ Wffn0.T + Bffn0.reshape(1, -1))
+    ff_out = ff_hidden @ Wffn2.T + Bffn2.reshape(1, -1)
+
     x_ff_res = x_norm0 + ff_out
-    x_norm1 = layernorm(x_ff_res, norm1_w, norm1_b)
 
-    m = np.ones((S,), dtype=np.int32)
+    c20 = float(np.loadtxt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_ffn_affine2_c0.txt')))
+    c21 = float(np.loadtxt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_ffn_affine2_c1.txt')))
+    c22 = float(np.loadtxt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_ffn_affine2_c2.txt')))
+    fL2 = c20 + c21 / np.sqrt(S_total) + c22 / S_total
+    a2 = load_txt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_ffn_affine2_a.txt')) * fL2
+    b2 = load_txt(os.path.join(args.weights_dir, 'linformer_transformerLayers_transformer0_ffn_affine2_b.txt')) * fL2
+    x_norm1 = x_ff_res * a2.reshape(1, -1) + b2.reshape(1, -1)
 
-    # x_max: 逐维取最大；x_mean: 有效位置平均
-    x_max = x_norm1.max(axis=0)
-    x_mean = (x_norm1 * m.reshape(-1, 1)).sum(axis=0) / (m.sum() if m.sum() > 0 else 1)
-    x_feat = np.concatenate([x_max.reshape(1, -1), x_mean.reshape(1, -1)], axis=-1)  # [1,256]
+    fc_w = load_matrix(os.path.join(args.weights_dir, 'fcLinear_0_weight.txt'), (20, 128))  # [20,128]
+    fc_b = load_txt(os.path.join(args.weights_dir, 'fcLinear_0_bias.txt'))    # [20]
+    y_logit = x_norm1.mean(axis=0, keepdims=True) @ fc_w.T + fc_b.reshape(1, -1)  # 简单平均池化
 
-    # 读取 fcLinear Sequential 权重
-    # Linear(256->1024) + BN(1024) + ReLU + Dropout + Linear(1024->C)
-    fc0_w = sd['fcLinear.0.weight'].detach().cpu().numpy()  # [1024,256]
-    fc0_b = sd['fcLinear.0.bias'].detach().cpu().numpy()    # [1024]
-    bn_w = sd['fcLinear.1.weight'].detach().cpu().numpy()   # [1024]
-    bn_b = sd['fcLinear.1.bias'].detach().cpu().numpy()     # [1024]
-    bn_rm = sd['fcLinear.1.running_mean'].detach().cpu().numpy()  # [1024]
-    bn_rv = sd['fcLinear.1.running_var'].detach().cpu().numpy()   # [1024]
-    fc4_w = sd['fcLinear.4.weight'].detach().cpu().numpy()  # [C,1024]
-    fc4_b = sd['fcLinear.4.bias'].detach().cpu().numpy()    # [C]
-
-    # 前向：fc0 -> BN(inference) -> ReLU -> fc4
-    h0 = x_feat @ fc0_w.T + fc0_b.reshape(1, -1)  # [1,1024]
-    eps_bn = 1e-5
-    h_bn = ((h0 - bn_rm.reshape(1, -1)) / np.sqrt(bn_rv.reshape(1, -1) + eps_bn)) * bn_w.reshape(1, -1) + bn_b.reshape(1, -1)
-    h_relu = np.maximum(h_bn, 0.0)
-    y_logit = h_relu @ fc4_w.T + fc4_b.reshape(1, -1)  # [1,C]
-
-    # 数值稳定softmax
     logits_max = y_logit.max(axis=-1, keepdims=True)
     y_prob = np.exp(y_logit - logits_max)
     y_prob = y_prob / y_prob.sum(axis=-1, keepdims=True)
     y_pred = int(np.argmax(y_prob, axis=-1)[0])
 
-    print(f"The plaintext calculation result is: {y_pred}")
+    print('Forward done. Shapes:')
+    print('x_in', x_in.shape, 'X_E', X_E.shape, 'X_F', X_F.shape)
+    print('Q', Q.shape, 'K', K.shape, 'V', V.shape, 'attn_out', attn_out.shape)
+    print('x_norm1', x_norm1.shape, 'y_logit', y_logit.shape)
+    print('Pred:', y_pred, 'Prob:', float(y_prob[0, y_pred]))
 
 
 if __name__ == '__main__':

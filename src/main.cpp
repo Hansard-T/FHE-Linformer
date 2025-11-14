@@ -1,4 +1,6 @@
 #include <iostream>
+#include <algorithm>
+#include <cmath>
 #include "FHEController.h"
 #include <chrono>
 #include <filesystem>
@@ -114,8 +116,25 @@ int main(int argc, char* argv[]) {
     int timing = (duration_cast<milliseconds>( high_resolution_clock::now() - start)).count() / 1000.0;
     if (verbose) cout << endl << "The evaluation of the FHE circuit took: " << timing << " seconds." << endl;
 
-    size_t idx = std::distance(plain_result.begin(), std::max_element(plain_result.begin(), plain_result.end()));
-    if (verbose) cout << "The predicted class is: " << idx / 128 << endl;
+    vector<double> softmax_test;
+    for (int i = 0; i < 20; i++) {
+        softmax_test.push_back(plain_result[i*128]);
+    }
+
+    double maxv = *max_element(softmax_test.begin(), softmax_test.end());
+    vector<double> softmax_prob;
+    softmax_prob.reserve(softmax_test.size());
+    double sumexp = 0.0;
+    for (int i = 0; i < softmax_test.size(); i++) {
+        double v = exp(softmax_test[i] - maxv);
+        softmax_prob.push_back(v);
+        sumexp += v;
+    }
+    for (int i = 0; i < softmax_prob.size(); i++) {
+        softmax_prob[i] /= sumexp;
+    }
+    int pred = (int)distance(softmax_prob.begin(), max_element(softmax_prob.begin(), softmax_prob.end()));
+    cout << "Pred: " << pred << endl;
 }
 
 Ctxt encoder1() {
