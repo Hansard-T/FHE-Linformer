@@ -111,6 +111,7 @@ public:
     vector<Ctxt> matmulRElarge(vector<Ctxt>& rows, const vector<Ptxt>& weight, const Ptxt& bias, double mask_value = 1);
     vector<Ctxt> matmulCR(vector<Ctxt> rows, const Ptxt& weight, const Ptxt& bias );
     vector<Ctxt> matmulCR(vector<Ctxt> rows, const Ctxt& matrix);
+    vector<Ctxt> matmulCR_128(vector<Ctxt> rows, const Ctxt& matrix);
     vector<Ctxt> matmulCRlarge(vector<vector<Ctxt>> rows, vector<Ptxt> weights, const Ptxt& bias);
 
     Ctxt matmulScores(vector<Ctxt> queries, const Ctxt& key);
@@ -128,11 +129,13 @@ public:
 
     Ctxt mask_block(const Ctxt& c, int from, int to, double mask_value = 1);
     Ctxt mask_heads(const Ctxt& c, double mask_value = 1);
+    Ctxt mask_heads_128(const Ctxt& c, double mask_value = 1);
     Ctxt mask_mod_n(const Ctxt& c, int n);
     Ctxt mask_mod_n(const Ctxt& c, int n, int padding, int max_slots);
     Ctxt mask_first_n(const Ctxt& c, int n, double mask_value = 1);
 
     Ctxt eval_exp(const Ctxt& c, int inputs_number);
+    Ctxt powN(const Ctxt& c, int N);
     Ctxt eval_inverse(const Ctxt& c, double min, double max);
     Ctxt eval_inverse_naive(const Ctxt& c, double min, double max);
     Ctxt eval_inverse_naive_2(const Ctxt& c, double min, double max, double mult);

@@ -794,7 +794,7 @@ void FHEController::print_padded(const Ctxt &c, int slots, int padding, string p
     cout << setprecision(10) << fixed;
     cout << "[ ";
 
-    for (int i = 0; i < slots * padding; i += padding) {
+    for (int i = 1; i < slots * padding; i += padding) {
         string segno = "";
         if (v[i] > 0) {
             segno = " ";
@@ -957,6 +957,20 @@ vector<Ctxt> FHEController::matmulCR(vector<Ctxt> rows, const Ctxt& matrix) {
     return columns;
 }
 
+vector<Ctxt> FHEController::matmulCR_128(vector<Ctxt> rows, const Ctxt& matrix) {
+    vector<Ctxt> columns;
+
+    for (int i = 0; i < rows.size(); i++) {
+        Ctxt m = mult(rows[i], matrix);
+
+        m = rotsum(m, 128, 1);
+
+        columns.push_back(m);
+    }
+
+    return columns;
+}
+
 vector<Ctxt> FHEController::matmulCR(vector<Ctxt> rows, const Ptxt& weight, const Ptxt& bias) {
     vector<Ctxt> columns;
 
@@ -1004,16 +1018,16 @@ vector<Ctxt> FHEController::matmulCRlarge(vector<vector<Ctxt>> rows, vector<Ptxt
 }
 
 Ctxt FHEController::matmulScores(vector<Ctxt> queries, const Ctxt &key) {
-    vector<Ctxt> scores = matmulCR(queries, key);
-
+    vector<Ctxt> scores = matmulCR_128(queries, key);
+    
     double r = 1 / 8.0; //Later corrected with e^(x/r)
 
-    Ctxt scores_wrapped = mask_heads(scores[scores.size() - 1], 1 / 8.0 * r);
+    Ctxt scores_wrapped = mask_heads_128(scores[scores.size() - 1], 1 / 8.0 * r);
     scores_wrapped = rotate(scores_wrapped, -1);
 
     for (int i = scores.size() - 2; i >= 0; i--) {
         scores_wrapped = add(scores_wrapped,
-                             mask_heads(scores[i], 1 / 8.0 * r));
+                             mask_heads_128(scores[i], 1 / 8.0 * r));
 
         if (i > 0) scores_wrapped = rotate(scores_wrapped, -1);
     }
@@ -1196,6 +1210,20 @@ Ctxt FHEController::mask_heads(const Ctxt& c, double mask_value) {
     return mult(c, encode(mask, c->GetLevel(), num_slots));
 }
 
+Ctxt FHEController::mask_heads_128(const Ctxt& c, double mask_value) {
+    vector<double> mask;
+
+    for (int i = 0; i < num_slots; i++) {
+        if (i % 128 == 0) {
+            mask.push_back(mask_value);
+        } else {
+            mask.push_back(0);
+        }
+    }
+
+    return mult(c, encode(mask, c->GetLevel(), num_slots));
+}
+
 Ctxt FHEController::mask_mod_n(const Ctxt& c, int n) {
     vector<double> mask;
     for (int i = 0; i < num_slots; i++) {
@@ -1250,7 +1278,7 @@ Ctxt FHEController::eval_exp(const Ctxt &c, int inputs_number) {
     vector<double> mask;
     for (int i = 0; i < num_slots; i++) {
         //Here 12 è il numero di token, da cambiare
-        if (i % 64 < inputs_number && i < (128 * inputs_number)) {
+        if (i % 128 < inputs_number && i < (128 * inputs_number)) {
             mask.push_back(0);
         } else {
             mask.push_back(-1);

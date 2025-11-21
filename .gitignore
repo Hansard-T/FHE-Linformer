@@ -6,3 +6,10 @@
 /weights-20NG
 /src/trained_models
 /src/trained_models
+/weights-sst2
+/checkpoint
+/src/python/weights-20NG
+/src/tmp_embeddings
+/src/tmp_embeddings
+/src/tmp_embeddings
+*.txt

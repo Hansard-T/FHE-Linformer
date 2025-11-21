@@ -104,6 +104,7 @@ int main(int argc, char* argv[]) {
 
     encoder1output = encoder1();
 
+    // encoder1output = controller.load_ciphertext("../checkpoint/encodered.bin");
     Ctxt pooled = pooler(encoder1output);
 
     Ctxt classified = classifier(pooled);
@@ -134,6 +135,10 @@ int main(int argc, char* argv[]) {
         softmax_prob[i] /= sumexp;
     }
     int pred = (int)distance(softmax_prob.begin(), max_element(softmax_prob.begin(), softmax_prob.end()));
+    
+    for (int i = 0; i < softmax_prob.size(); i++) {
+        cout << "Softmax Prob: " << softmax_prob[i] << endl;
+    }
     cout << "Pred: " << pred << endl;
 }
 
@@ -170,9 +175,9 @@ Ctxt encoder1() {
         inputs.push_back(controller.read_expanded_input(input_folder + "input_" + to_string(i) + ".txt"));
     }
 
-    Ptxt query_w = controller.read_plain_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WQ_weight.txt");
+    Ptxt query_w = controller.read_plain_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WQ_weight_T.txt");
     Ptxt query_b = controller.read_plain_repeated_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WQ_bias.txt");
-    Ptxt key_w = controller.read_plain_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WK_weight.txt");
+    Ptxt key_w = controller.read_plain_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WK_weight_T.txt");
     Ptxt key_b = controller.read_plain_repeated_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WK_bias.txt");
 
     vector<Ctxt> Q = controller.matmulRE(inputs, query_w, query_b);
@@ -180,19 +185,44 @@ Ctxt encoder1() {
 
     Ctxt K_wrapped = controller.wrapUpRepeated(K);
 
-    Ctxt scores = controller.matmulScores(Q, K_wrapped);
-    scores = controller.eval_exp(scores, inputs.size());
+    vector<Ctxt> Q_1;
+    vector<Ctxt> Q_2;
+    for (int i = 0; i < 128; i++) {
+        Q_1.push_back(Q[i]);
+    }
+    for (int i = 128; i < Q.size(); i++) {
+        Q_2.push_back(Q[i]);
+    }
 
-    Ctxt scores_sum = controller.rotsum(scores, 128, 128);
-    Ctxt scores_denominator = controller.eval_inverse_naive(scores_sum, 2, 5000);
+    Ctxt scores_1 = controller.matmulScores(Q_1, K_wrapped);
+    scores_1 = controller.eval_exp(scores_1, Q_1.size());
 
-    scores = controller.mult(scores, scores_denominator);
+    Ctxt scores_2 = controller.matmulScores(Q_2, K_wrapped);
+    scores_2 = controller.eval_exp(scores_2, Q_2.size());
 
-    vector<Ctxt> unwrapped_scores = controller.unwrapScoresExpanded(scores, inputs.size());
+    Ctxt scores_sum_1 = controller.rotsum(scores_1, 32, 128);
+    Ctxt scores_sum_2 = controller.rotsum(scores_2, 32, 128);
+    controller.print(scores_sum_1, 128, "scores_sum_1");
+    controller.print_padded(scores_sum_1, 32, 128, "scores_sum_1_padded");
 
-    Ptxt value_w = controller.read_plain_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WV_weight.txt");
+    controller.print_min_max(scores_sum_1);
+    controller.print_min_max(scores_sum_2);
+
+    Ctxt scores_denominator_1 = controller.eval_inverse_naive(scores_sum_1, -1, 190000);
+    Ctxt scores_denominator_2 = controller.eval_inverse_naive(scores_sum_2, -1, 190000);
+
+    scores_1 = controller.mult(scores_1, scores_denominator_1);
+    scores_2 = controller.mult(scores_2, scores_denominator_2);
+
+    vector<Ctxt> unwrapped_scores_1 = controller.unwrapExpanded(scores_1, 128);
+    vector<Ctxt> unwrapped_scores_2 = controller.unwrapExpanded(scores_2, inputs.size() - 128);
+
+    vector<Ctxt> unwrapped_scores;
+    unwrapped_scores.insert(unwrapped_scores.end(), unwrapped_scores_1.begin(), unwrapped_scores_1.end());
+    unwrapped_scores.insert(unwrapped_scores.end(), unwrapped_scores_2.begin(), unwrapped_scores_2.end());
+
+    Ptxt value_w = controller.read_plain_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WV_weight_T.txt");
     Ptxt value_b = controller.read_plain_repeated_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WV_bias.txt");
-    
 
     vector<Ctxt> V = controller.matmulRE(inputs_F, value_w, value_b);
     Ctxt V_wrapped = controller.wrapUpRepeated(V);
@@ -235,7 +265,7 @@ Ctxt encoder1() {
     Ctxt wrappedOutput_1 = controller.wrapUpExpanded(output_1);
 
     Ptxt a1 = controller.read_plain_repeated_input("../weights-20NG/linformer_transformerLayers_transformer0_ffn_affine1_a.txt", wrappedOutput_0->GetLevel(), fL1);
-    Ptxt b1 = controller.read_plain_repeated_input("../weights-20NG/linformer_transformerLayers_transformer0_ffn_affine1_b.txt", wrappedOutput_0->GetLevel(), fL1);
+    Ptxt b1 = controller.read_plain_repeated_input("../weights-20NG/linformer_transformerLayers_transformer0_ffn_affine1_b.txt", wrappedOutput_0->GetLevel() + 1, fL1);
 
     wrappedOutput_0 = controller.mult(wrappedOutput_0, a1);
     wrappedOutput_0 = controller.add(wrappedOutput_0, b1);
@@ -258,12 +288,13 @@ Ctxt encoder1() {
 
     start = high_resolution_clock::now();
 
-    double GELU_max_abs_value = 0.4078;
+    double GELU_max_abs_value = 1.0 / 5.0;
 
-    Ptxt intermediate_w_1 = controller.read_plain_input("../weights-20NG/ffn_W0_block_0.txt", wrappedOutput_0->GetLevel(), GELU_max_abs_value);
-    Ptxt intermediate_w_2 = controller.read_plain_input("../weights-20NG/ffn_W0_block_1.txt", wrappedOutput_0->GetLevel(), GELU_max_abs_value);
-    Ptxt intermediate_w_3 = controller.read_plain_input("../weights-20NG/ffn_W0_block_2.txt", wrappedOutput_0->GetLevel(), GELU_max_abs_value);
-    Ptxt intermediate_w_4 = controller.read_plain_input("../weights-20NG/ffn_W0_block_3.txt", wrappedOutput_0->GetLevel(), GELU_max_abs_value);
+    // 这部分检查一下
+    Ptxt intermediate_w_1 = controller.read_plain_input("../weights-20NG/ffn_W0_transposed_block_0.txt", wrappedOutput_0->GetLevel(), GELU_max_abs_value);
+    Ptxt intermediate_w_2 = controller.read_plain_input("../weights-20NG/ffn_W0_transposed_block_1.txt", wrappedOutput_0->GetLevel(), GELU_max_abs_value);
+    Ptxt intermediate_w_3 = controller.read_plain_input("../weights-20NG/ffn_W0_transposed_block_2.txt", wrappedOutput_0->GetLevel(), GELU_max_abs_value);
+    Ptxt intermediate_w_4 = controller.read_plain_input("../weights-20NG/ffn_W0_transposed_block_3.txt", wrappedOutput_0->GetLevel(), GELU_max_abs_value);
 
     vector<Ptxt> dense_weights = {intermediate_w_1, intermediate_w_2, intermediate_w_3, intermediate_w_4};
 
@@ -277,11 +308,13 @@ Ctxt encoder1() {
     outputs_raw.reserve(output_0.size() + output_1.size());
     outputs_raw.insert(outputs_raw.end(), output_0.begin(), output_0.end());
     outputs_raw.insert(outputs_raw.end(), output_1.begin(), output_1.end());
+    cout << outputs_raw.size() << endl;
 
     // 统一打包为容器密文
     auto outputs = controller.generate_containers(outputs_raw, nullptr);
 
     for (int i = 0; i < outputs.size(); i++) {
+        controller.print_min_max(outputs[i]);
         outputs[i] = controller.eval_gelu_function(outputs[i], -1, 1, GELU_max_abs_value, 119);
         outputs[i] = controller.bootstrap(outputs[i]);
     }
@@ -328,7 +361,7 @@ Ctxt encoder1() {
     cout << "fL2: " << fL2 << endl;
 
     Ptxt a2 = controller.read_plain_repeated_input("../weights-20NG/linformer_transformerLayers_transformer0_ffn_affine2_a.txt", wrappedOutput_2->GetLevel(), fL2);
-    Ptxt b2 = controller.read_plain_repeated_input("../weights-20NG/linformer_transformerLayers_transformer0_ffn_affine2_b.txt", wrappedOutput_3->GetLevel(), fL2);
+    Ptxt b2 = controller.read_plain_repeated_input("../weights-20NG/linformer_transformerLayers_transformer0_ffn_affine2_b.txt", wrappedOutput_3->GetLevel() + 1, fL2);
 
     wrappedOutput_2 = controller.mult(wrappedOutput_2, a2);
     wrappedOutput_3 = controller.mult(wrappedOutput_3, a2);
@@ -341,6 +374,8 @@ Ctxt encoder1() {
 
     if (verbose) cout << "The evaluation of Output took: " << (duration_cast<milliseconds>( high_resolution_clock::now() - start)).count() / 1000.0 << " seconds." << endl;
     if (verbose) controller.print_expanded(output_2[0], 0, 128,"Output (Expanded)");
+    
+    controller.save(output_2[0], "../checkpoint/encodered.bin");
 
     return output_2[0];
 }
@@ -348,10 +383,10 @@ Ctxt encoder1() {
 Ctxt pooler(Ctxt input) {
     auto start = high_resolution_clock::now();
 
-    double tanhScale = 0.9 / 1.003518;
+    double tanhScale = 1.0 / 8.0;
 
-    Ptxt weight = controller.read_plain_input("../weights-20NG/pooler_dense_weight.txt", input->GetLevel(), tanhScale);
-    Ptxt bias = controller.read_plain_repeated_input("../weights-20NG/pooler_dense_bias.txt", input->GetLevel(), tanhScale);
+    Ptxt weight = controller.read_plain_input("../weights-20NG/pooler_dense_weight_T.txt", input->GetLevel(), tanhScale);
+    Ptxt bias = controller.read_plain_repeated_input("../weights-20NG/pooler_dense_bias.txt", input->GetLevel() + 1, tanhScale);
 
     Ctxt output = controller.mult(input, weight);
 
