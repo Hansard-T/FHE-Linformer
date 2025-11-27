@@ -102,9 +102,9 @@ int main(int argc, char* argv[]) {
 
     Ctxt encoder1output;
 
-    // encoder1output = encoder1();
+    encoder1output = encoder1();
 
-    encoder1output = controller.load_ciphertext("../checkpoint/encodered.bin");
+    // encoder1output = controller.load_ciphertext("../checkpoint/encodered.bin");
     Ctxt pooled = pooler(encoder1output);
 
     Ctxt classified = classifier(pooled);
@@ -184,110 +184,65 @@ Ctxt encoder1() {
 
     Ctxt K_wrapped = controller.wrapUpRepeated(K);
 
-    // vector<Ctxt> Q_1;
-    // vector<Ctxt> Q_2;
-    // for (int i = 0; i < 128; i++) {
-    //     Q_1.push_back(Q[i]);
-    // }
-    // for (int i = 128; i < Q.size(); i++) {
-    //     Q_2.push_back(Q[i]);
-    // }
+    vector<Ctxt> Q_1;
+    vector<Ctxt> Q_2;
+    for (int i = 0; i < 128; i++) {
+        Q_1.push_back(Q[i]);
+    }
+    for (int i = 128; i < Q.size(); i++) {
+        Q_2.push_back(Q[i]);
+    }
 
-    Ctxt scores = controller.matmulScores(Q[0], K_wrapped);
-    scores = controller.eval_exp(scores, 32);
-    controller.print(scores, 128, "scores");
-    controller.print_padded(scores, 32, 128, "scores_padded");
+    Ctxt scores_1 = controller.matmulScores(Q_1, K_wrapped);
+    scores_1 = controller.eval_exp(scores_1, Q_1.size());
 
-    Ctxt scores_sum = controller.rotsum(scores, 32, 128);
+    Ctxt scores_2 = controller.matmulScores(Q_2, K_wrapped);
+    scores_2 = controller.eval_exp(scores_2, Q_2.size());
 
-    Ctxt scores_denominator = controller.eval_inverse_naive(scores_sum, -1, 128);
+    Ctxt scores_sum_1 = controller.rotsum(scores_1, 32, 128);
+    Ctxt scores_sum_2 = controller.rotsum(scores_2, 32, 128);
+    controller.print(scores_sum_1, 128, "scores_sum_1");
+    controller.print_padded(scores_sum_1, 32, 128, "scores_sum_1_padded");
 
-    scores = controller.mult(scores, scores_denominator);
+    controller.print_min_max(scores_sum_1);
+    controller.print_min_max(scores_sum_2);
 
-    vector<Ctxt> unwrapped_scores = controller.unwrapExpanded(scores, 1);
-   
+    Ctxt scores_denominator_1 = controller.eval_inverse_naive(scores_sum_1, -1, 190000);
+    Ctxt scores_denominator_2 = controller.eval_inverse_naive(scores_sum_2, -1, 190000);
+
+    scores_1 = controller.mult(scores_1, scores_denominator_1);
+    scores_2 = controller.mult(scores_2, scores_denominator_2);
+
+    vector<Ctxt> unwrapped_scores_1 = controller.unwrapExpanded(scores_1, 128);
+    vector<Ctxt> unwrapped_scores_2 = controller.unwrapExpanded(scores_2, inputs.size() - 128);
+
+    vector<Ctxt> unwrapped_scores;
+    unwrapped_scores.insert(unwrapped_scores.end(), unwrapped_scores_1.begin(), unwrapped_scores_1.end());
+    unwrapped_scores.insert(unwrapped_scores.end(), unwrapped_scores_2.begin(), unwrapped_scores_2.end());
+
     Ptxt value_w = controller.read_plain_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WV_weight_T.txt");
     Ptxt value_b = controller.read_plain_repeated_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WV_bias.txt");
 
     vector<Ctxt> V = controller.matmulRE(inputs_F, value_w, value_b);
     Ctxt V_wrapped = controller.wrapUpRepeated(V);
 
-    vector<Ctxt> cls_output_vec = controller.matmulRE(unwrapped_scores, V_wrapped, 128, 128);
-    Ctxt cls_output = cls_output_vec[0];
-    vector<Ctxt> output;
-    output.reserve(inputs.size());
-    output.push_back(cls_output);
-    Ptxt zero_p = controller.encode(0, cls_output->GetLevel(), 0);
-    Ctxt zero_c = controller.encrypt_ptxt(zero_p);
-    for (int i = 1; i < inputs.size(); i++) {
-        output.push_back(zero_c->Clone());
-    }
+    vector<Ctxt> output = controller.matmulRE(unwrapped_scores, V_wrapped, 128, 128);
 
     if (verbose) cout << "The evaluation of Self-Attention took: " << (duration_cast<milliseconds>( high_resolution_clock::now() - start)).count() / 1000.0 << " seconds." << endl;
     if (verbose) controller.print(output[0], 128, "Self-Attention (Repeated)");
+
+    // 残差 + Affine1    
 
     start = high_resolution_clock::now();
 
     Ptxt dense_w = controller.read_plain_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WO_weight.txt", output[0]->GetLevel());
     Ptxt dense_b = controller.read_plain_expanded_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WO_bias.txt", output[0]->GetLevel() + 1);
 
-    Ptxt null_bias = nullptr;
-    output = controller.matmulCR(output, dense_w, null_bias);
-    output[0] = controller.add(output[0], dense_b);
+    output = controller.matmulCR(output, dense_w, dense_b);
+
     for (int i = 0; i < output.size(); i++) {
         output[i] = controller.add(output[i], inputs[i]);
     }
-
-    // Ctxt scores_1 = controller.matmulScores(Q_1, K_wrapped);
-    // scores_1 = controller.eval_exp(scores_1, Q_1.size());
-
-    // Ctxt scores_2 = controller.matmulScores(Q_2, K_wrapped);
-    // scores_2 = controller.eval_exp(scores_2, Q_2.size());
-
-    // Ctxt scores_sum_1 = controller.rotsum(scores_1, 32, 128);
-    // Ctxt scores_sum_2 = controller.rotsum(scores_2, 32, 128);
-    // controller.print(scores_sum_1, 128, "scores_sum_1");
-    // controller.print_padded(scores_sum_1, 32, 128, "scores_sum_1_padded");
-
-    // controller.print_min_max(scores_sum_1);
-    // controller.print_min_max(scores_sum_2);
-
-    // Ctxt scores_denominator_1 = controller.eval_inverse_naive(scores_sum_1, -1, 190000);
-    // Ctxt scores_denominator_2 = controller.eval_inverse_naive(scores_sum_2, -1, 190000);
-
-    // scores_1 = controller.mult(scores_1, scores_denominator_1);
-    // scores_2 = controller.mult(scores_2, scores_denominator_2);
-
-    // vector<Ctxt> unwrapped_scores_1 = controller.unwrapExpanded(scores_1, 128);
-    // vector<Ctxt> unwrapped_scores_2 = controller.unwrapExpanded(scores_2, inputs.size() - 128);
-
-    // vector<Ctxt> unwrapped_scores;
-    // unwrapped_scores.insert(unwrapped_scores.end(), unwrapped_scores_1.begin(), unwrapped_scores_1.end());
-    // unwrapped_scores.insert(unwrapped_scores.end(), unwrapped_scores_2.begin(), unwrapped_scores_2.end());
-
-    // Ptxt value_w = controller.read_plain_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WV_weight_T.txt");
-    // Ptxt value_b = controller.read_plain_repeated_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WV_bias.txt");
-
-    // vector<Ctxt> V = controller.matmulRE(inputs_F, value_w, value_b);
-    // Ctxt V_wrapped = controller.wrapUpRepeated(V);
-
-    // vector<Ctxt> output = controller.matmulRE(unwrapped_scores, V_wrapped, 128, 128);
-
-    // if (verbose) cout << "The evaluation of Self-Attention took: " << (duration_cast<milliseconds>( high_resolution_clock::now() - start)).count() / 1000.0 << " seconds." << endl;
-    // if (verbose) controller.print(output[0], 128, "Self-Attention (Repeated)");
-
-    // // 残差 + Affine1    
-
-    // start = high_resolution_clock::now();
-
-    // Ptxt dense_w = controller.read_plain_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WO_weight.txt", output[0]->GetLevel());
-    // Ptxt dense_b = controller.read_plain_expanded_input("../weights-20NG/linformer_transformerLayers_transformer0_selfAttn_WO_bias.txt", output[0]->GetLevel() + 1);
-
-    // output = controller.matmulCR(output, dense_w, dense_b);
-
-    // for (int i = 0; i < output.size(); i++) {
-    //     output[i] = controller.add(output[i], inputs[i]);
-    // }
 
     double c10 = read_value("../weights-20NG/linformer_transformerLayers_transformer0_ffn_affine1_c0.txt");
     double c11 = read_value("../weights-20NG/linformer_transformerLayers_transformer0_ffn_affine1_c1.txt");
@@ -427,7 +382,7 @@ Ctxt encoder1() {
 Ctxt pooler(Ctxt input) {
     auto start = high_resolution_clock::now();
 
-    double tanhScale = 1.0 / 50;
+    double tanhScale = 1.0 / 18.0;
 
     Ptxt weight = controller.read_plain_input("../weights-20NG/pooler_dense_weight_T.txt", input->GetLevel(), tanhScale);
     Ptxt bias = controller.read_plain_repeated_input("../weights-20NG/pooler_dense_bias.txt", input->GetLevel() + 1, tanhScale);
@@ -469,7 +424,7 @@ Ctxt classifier(Ctxt input) {
         mask[i * 128] = 1;
     }
 
-    output = controller.mult(output, controller.encrypt(mask, output->GetLevel()));
+    output = controller.mult(output, controller.encode(mask, output->GetLevel(), controller.num_slots));
 
     return output;
 }

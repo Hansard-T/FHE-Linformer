@@ -794,7 +794,7 @@ void FHEController::print_padded(const Ctxt &c, int slots, int padding, string p
     cout << setprecision(10) << fixed;
     cout << "[ ";
 
-    for (int i = 1; i < slots * padding; i += padding) {
+    for (int i = 0; i < slots * padding; i += padding) {
         string segno = "";
         if (v[i] > 0) {
             segno = " ";
@@ -926,7 +926,7 @@ vector<Ctxt> FHEController::matmulRElarge(vector<Ctxt>& inputs, const vector<Ptx
             if (j == weights.size() - 1)
                 i_th_result = out;
             else {
-                //i_th_result = rotate(i_th_result, -128);
+                // i_th_result = rotate(i_th_result, -128);
                 i_th_result = rotate(i_th_result, -64);
                 i_th_result = rotate(i_th_result, -64);
 
@@ -969,6 +969,14 @@ vector<Ctxt> FHEController::matmulCR_128(vector<Ctxt> rows, const Ctxt& matrix) 
     }
 
     return columns;
+}
+
+Ctxt FHEController::matmulCR_128(Ctxt row, const Ctxt& matrix) {
+    Ctxt m = mult(row, matrix);
+
+    m = rotsum(m, 128, 1);
+
+    return m;
 }
 
 vector<Ctxt> FHEController::matmulCR(vector<Ctxt> rows, const Ptxt& weight, const Ptxt& bias) {
@@ -1022,6 +1030,10 @@ Ctxt FHEController::matmulScores(vector<Ctxt> queries, const Ctxt &key) {
     
     double r = 1 / 8.0; //Later corrected with e^(x/r)
 
+    if (scores.size() == 1) {
+        return mask_heads_128(scores[0], 1 / 8.0 * r);
+    }
+
     Ctxt scores_wrapped = mask_heads_128(scores[scores.size() - 1], 1 / 8.0 * r);
     scores_wrapped = rotate(scores_wrapped, -1);
 
@@ -1031,6 +1043,16 @@ Ctxt FHEController::matmulScores(vector<Ctxt> queries, const Ctxt &key) {
 
         if (i > 0) scores_wrapped = rotate(scores_wrapped, -1);
     }
+
+    return scores_wrapped;
+}
+
+Ctxt FHEController::matmulScores(Ctxt query, const Ctxt &key) {
+    Ctxt scores = matmulCR_128(query, key);
+
+    double r = 1 / 8.0;
+
+    Ctxt scores_wrapped = mask_heads_128(scores, 1 / 8.0 * r);
 
     return scores_wrapped;
 }

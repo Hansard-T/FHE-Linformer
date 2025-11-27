@@ -13,3 +13,5 @@
 /src/tmp_embeddings
 /src/tmp_embeddings
 *.txt
+/src/tmp_embeddings
+/src/tmp_embeddings

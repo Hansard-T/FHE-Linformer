@@ -125,7 +125,7 @@ def load_matrix(path, expect_shape):
 
 def main():
     parser = argparse.ArgumentParser(description='使用 tmp_embeddings/input_*.txt 与 weights-20NG 文本权重进行前向推理')
-    parser.add_argument('--tokens_dir', default='/Users/tangxianning/Downloads/FHE-Linformer/src/tmp_embeddings', help='包含 input_*.txt 的目录')
+    parser.add_argument('--tokens_dir', default='/Users/tangxianning/Downloads/FHE-Linformer/src/tmp_embeddings/test_0', help='包含 input_*.txt 的目录')
     parser.add_argument('--weights_dir', default='/Users/tangxianning/Downloads/FHE-Linformer/weights-20NG', help='文本权重目录')
     args = parser.parse_args()
 

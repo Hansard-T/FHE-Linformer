@@ -94,10 +94,10 @@ def save_sample_embeddings(vectors: np.ndarray, tokens: list, out_dir: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='提取20NG单条样本的词向量并保存到文件')
+    parser = argparse.ArgumentParser(description='提取20NG样本的词向量并保存到文件（支持批量）')
     parser.add_argument('--data_root', default='/Users/tangxianning/Downloads/FHE-Linformer/datasets/20NG')
     parser.add_argument('--split', choices=['train', 'test'], default='train')
-    parser.add_argument('--index', type=int, default=0, help='样本索引')
+    parser.add_argument('--index', type=int, default=0, help='样本索引（-1 表示处理该split下全部样本）')
     parser.add_argument('--source', choices=['cache', 'ckpt'], default='cache')
     parser.add_argument('--cache_path', default='/Users/tangxianning/Downloads/FHE-Linformer/cache/skipgram_d128_NG.pkl')
     parser.add_argument('--ckpt_path', default='')
@@ -107,12 +107,6 @@ def main():
 
     tokenizer = load_tokenizer_for_20ng(args.data_root)
 
-    sample_tokens = get_sample_tokens(args.data_root, args.split, args.index)
-
-    ids_list, mask_list = tokenizer.tokenize_sequences([sample_tokens], eval=False)
-    ids = np.array(ids_list[0], dtype=np.int64)
-    mask = np.array(mask_list[0], dtype=np.bool_)
-
     if args.source == 'cache':
         embedding_matrix = load_embedding_from_cache(args.cache_path)
     else:
@@ -120,18 +114,43 @@ def main():
             raise ValueError('当source=ckpt时必须提供--ckpt_path')
         embedding_matrix = load_embedding_from_ckpt(args.ckpt_path)
 
-    if embedding_matrix.shape[0] <= ids.max():
-        raise ValueError(
-            f"embedding矩阵行数({embedding_matrix.shape[0]})不足以索引最大id({int(ids.max())})，"
-            "请确认词表与embedding来源一致。"
-        )
-
-    vectors = embedding_matrix[ids]
-    vectors_valid = vectors[mask]
-    tokens_valid = [t for t, m in zip(sample_tokens, mask) if m]
-
-    save_sample_embeddings(vectors_valid, tokens_valid, args.save_dir)
-    print(f"已保存 {len(tokens_valid)} 个 token 的向量到目录：{args.save_dir}")
+    if args.index == -1:
+        ds = Sklearn_20NG(args.data_root, args.split)
+        ids_list, mask_list = tokenizer.tokenize_sequences(ds.sequences, eval=False)
+        total = len(ds.sequences)
+        print(f"开始批量处理 {args.split} split，总样本数：{total}")
+        for idx in range(total):
+            ids = np.array(ids_list[idx], dtype=np.int64)
+            mask = np.array(mask_list[idx], dtype=np.bool_)
+            if embedding_matrix.shape[0] <= ids.max():
+                raise ValueError(
+                    f"embedding矩阵行数({embedding_matrix.shape[0]})不足以索引最大id({int(ids.max())})，"
+                    "请确认词表与embedding来源一致。"
+                )
+            vectors = embedding_matrix[ids]
+            vectors_valid = vectors[mask]
+            tokens = ds.sequences[idx]
+            tokens_valid = [t for t, m in zip(tokens, mask) if m]
+            out_dir = os.path.join(args.save_dir, f"{args.split}_{idx}")
+            save_sample_embeddings(vectors_valid, tokens_valid, out_dir)
+            if idx % 50 == 0:
+                print(f"[{idx}/{total}] 已保存 {len(tokens_valid)} 个 token 的向量到目录：{out_dir}")
+        print("批量处理完成。")
+    else:
+        sample_tokens = get_sample_tokens(args.data_root, args.split, args.index)
+        ids_list, mask_list = tokenizer.tokenize_sequences([sample_tokens], eval=False)
+        ids = np.array(ids_list[0], dtype=np.int64)
+        mask = np.array(mask_list[0], dtype=np.bool_)
+        if embedding_matrix.shape[0] <= ids.max():
+            raise ValueError(
+                f"embedding矩阵行数({embedding_matrix.shape[0]})不足以索引最大id({int(ids.max())})，"
+                "请确认词表与embedding来源一致。"
+            )
+        vectors = embedding_matrix[ids]
+        vectors_valid = vectors[mask]
+        tokens_valid = [t for t, m in zip(sample_tokens, mask) if m]
+        save_sample_embeddings(vectors_valid, tokens_valid, args.save_dir)
+        print(f"已保存 {len(tokens_valid)} 个 token 的向量到目录：{args.save_dir}")
 
 
 if __name__ == '__main__':

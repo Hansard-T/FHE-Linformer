@@ -112,9 +112,11 @@ public:
     vector<Ctxt> matmulCR(vector<Ctxt> rows, const Ptxt& weight, const Ptxt& bias );
     vector<Ctxt> matmulCR(vector<Ctxt> rows, const Ctxt& matrix);
     vector<Ctxt> matmulCR_128(vector<Ctxt> rows, const Ctxt& matrix);
+    Ctxt matmulCR_128(Ctxt row, const Ctxt& matrix);
     vector<Ctxt> matmulCRlarge(vector<vector<Ctxt>> rows, vector<Ptxt> weights, const Ptxt& bias);
 
     Ctxt matmulScores(vector<Ctxt> queries, const Ctxt& key);
+    Ctxt matmulScores(Ctxt query, const Ctxt& key);
 
     Ctxt wrapUpRepeated(vector<Ctxt> vectors);
     Ctxt wrapUpExpanded(vector<Ctxt> vectors);
